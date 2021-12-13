@@ -1034,8 +1034,144 @@ class JAAD(object):
             sequence = self._get_crossing(image_set, annot_database, **params)
         elif params['seq_type'] == 'intention':
             sequence = self._get_intention(image_set, annot_database, **params)
-
+        # added >
+        elif params['seq_type'] == 'behavior':
+            sequence = self._get_behavior(image_set, annot_database, **params)
+        # added <
         return sequence
+
+    # added >
+    def _get_behavior(self, image_set, annotations, **params):
+        """
+        Generates trajectory data.
+        :param params: Parameters for generating trajectories
+        :param annotations: The annotations database
+        :return: A dictionary of trajectories
+        """
+
+        print('---------------------------------------------------------')
+        print("Generating behavior data")
+
+        num_pedestrians = 0
+        seq_stride = params['fstride']
+        sq_ratio = params['squarify_ratio']
+        height_rng = params['height_rng']
+
+        image_seq, pids_seq = [], []
+        box_seq, center_seq, occ_seq = [], [], []
+        intent_seq = []
+        vehicle_seq = []
+        _behavior_seq, _appearance_seq, _attributes_seq = {},{},{}
+        road_type_seq = []
+        ped_crossing_seq = []
+        ped_sign_seq = []
+        stop_sign_seq = []
+        traffic_light_seq = []
+
+        video_ids, _pids = self._get_data_ids(image_set, params)
+
+        for vid in sorted(video_ids):
+            img_width = annotations[vid]['width']
+            pid_annots = annotations[vid]['ped_annotations']
+            vid_annots = annotations[vid]['vehicle_annotations']
+            tra_annots = annotations[vid]['traffic_annotations']
+
+            for pid in sorted(annotations[vid]['ped_annotations']):
+                if params['data_split_type'] != 'default' and pid not in _pids:
+                    continue
+                if 'p' in pid:
+                    continue
+                if params['sample_type'] == 'beh' and 'b' not in pid:
+                    continue
+                num_pedestrians += 1
+                frame_ids = pid_annots[pid]['frames']
+                images = [join(self._jaad_path, 'images', vid, '{:05d}.png'.format(f)) for f in
+                          pid_annots[pid]['frames']]
+                boxes = pid_annots[pid]['bbox']
+                occlusions = pid_annots[pid]['occlusion']
+
+                _behavior = pid_annots[pid]['behavior']
+                _appearance = pid_annots[pid]['appearance']
+                _attributes = pid_annots[pid]['attributes']
+
+                if height_rng[0] > 0 or height_rng[1] < float('inf'):
+                    images, boxes, frame_ids, occlusions = self._height_check(height_rng,
+                                                                              frame_ids, boxes,
+                                                                              images, occlusions)
+
+                if len(boxes) / seq_stride < params['min_track_size']:
+                    continue
+
+                if sq_ratio:
+                    boxes = [self._squarify(b, sq_ratio, img_width) for b in boxes]
+
+                ped_ids = [pid] * len(boxes)
+
+                if 'b' not in pid:
+                    intent = [0] * len(boxes)
+                else:
+                    if annotations[vid]['ped_annotations'][pid]['attributes']['crossing'] == -1:
+                        intent = [0] * len(boxes)
+                    else:
+                        intent = [1] * len(boxes)
+                center = [self._get_center(b) for b in boxes]
+
+                occ_seq.append(occlusions[::seq_stride])
+                image_seq.append(images[::seq_stride])
+                box_seq.append(boxes[::seq_stride])
+                center_seq.append(center[::seq_stride])
+                intent_seq.append(intent[::seq_stride])
+                pids_seq.append(ped_ids[::seq_stride])
+                vehicle_seq.append([vid_annots[i] for i in frame_ids][::seq_stride])
+                # add further data
+                for key in _behavior.keys():
+                    store = _behavior[key][::seq_stride]
+                    if key in _behavior_seq:
+                        _behavior_seq[key].append(store)
+                    else:
+                        _behavior_seq[key] = [store]
+
+                for key in _appearance.keys():
+                    store = _appearance[key][::seq_stride]
+                    if key in _appearance_seq:
+                        _appearance_seq[key].append(store)
+                    else:
+                        _appearance_seq[key] = [store]
+
+                for key in _attributes.keys():
+                    store = [_attributes[key]]* len(boxes)
+                    if key in _attributes_seq:
+                        _attributes_seq[key].append(store)
+                    else:
+                        _attributes_seq[key] = [store]
+            
+                road_type_seq.append([tra_annots['road_type']] * len(boxes))
+                ped_crossing_seq.append([tra_annots[i]['ped_crossing'] for i in frame_ids][::seq_stride])
+                ped_sign_seq.append([tra_annots[i]['ped_sign'] for i in frame_ids][::seq_stride])
+                stop_sign_seq.append([tra_annots[i]['stop_sign'] for i in frame_ids][::seq_stride])
+                traffic_light_seq.append([tra_annots[i]['traffic_light'] for i in frame_ids][::seq_stride])   
+
+        print('Split: %s' % image_set)
+        print('Number of pedestrians: %d ' % num_pedestrians)
+        print('Total number of samples: %d ' % len(image_seq))
+
+        dat = {'image': image_seq,
+                'pid': pids_seq,
+                'bbox': box_seq,
+                'center': center_seq,
+                'occlusion': occ_seq,
+                'intent': intent_seq,
+                'vehicle_act': vehicle_seq,
+                # add further data
+                'road_type': road_type_seq,
+                'ped_crossing': ped_crossing_seq,
+                'ped_sign': ped_sign_seq,
+                'stop_sign': stop_sign_seq,
+                'traffic_light': traffic_light_seq}
+        return {**dat, **_behavior_seq, **_appearance_seq, **_attributes_seq} # merge dicts
+    # added <
+
+
 
     def _get_trajectories(self, image_set, annotations, **params):
         """
